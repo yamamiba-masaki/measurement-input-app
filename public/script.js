@@ -1,14 +1,17 @@
-// ========== Configuration ========== 
+// ========== Configuration ==========
 const API_BASE_URL = '/api';
 
 // ========== State Management =========
-let currentMasterData = null;
+let currentPart = null;
+let currentLocations = [];
+let currentLocation = null;
 let currentMeasurementId = null;
+let completionStatus = {};
 
 // ========== Initialization =========
 document.addEventListener('DOMContentLoaded', () => {
     setupTabNavigation();
-    loadMasterData();
+    loadParts();
     setDefaultDates();
 });
 
@@ -23,17 +26,12 @@ function setupTabNavigation() {
 }
 
 function switchTab(tabName) {
-    // Hide all tabs
     document.querySelectorAll('.tab-content').forEach(tab => {
         tab.classList.remove('active');
     });
-
-    // Remove active from all buttons
     document.querySelectorAll('.tab-button').forEach(btn => {
         btn.classList.remove('active');
     });
-
-    // Show selected tab
     document.getElementById(tabName).classList.add('active');
     document.querySelector(`[data-tab="${tabName}"]`).classList.add('active');
 }
@@ -44,92 +42,191 @@ function setDefaultDates() {
     document.getElementById('reportDate').value = today;
 }
 
-// ========== Master Data Loading =========
-async function loadMasterData() {
+// ========== Parts Loading =========
+async function loadParts() {
     try {
         const response = await fetch(`${API_BASE_URL}/master-data`);
-        if (!response.ok) throw new Error('Failed to load master data');
+        if (!response.ok) throw new Error('Failed to load parts');
         
-        const masterData = await response.json();
+        const parts = await response.json();
         const select = document.getElementById('partSelect');
         select.innerHTML = '<option value="">-- 部品を選択してください --</option>';
 
-        masterData.forEach(item => {
+        parts.forEach(part => {
             const option = document.createElement('option');
-            option.value = item.id;
-            option.textContent = item.item_name;
+            option.value = part.id;
+            option.textContent = part.part_name;
             select.appendChild(option);
         });
 
-        // Add change event listener
-        select.addEventListener('change', updateMasterDataInfo);
+        select.addEventListener('change', loadPartLocations);
     } catch (error) {
-        console.error('Error loading master data:', error);
-        showMessage('マスターデータの読み込みに失敗しました', 'error', 'measurement');
+        console.error('Error loading parts:', error);
+        showMessage('部品データの読み込みに失敗しました', 'error', 'measurement');
     }
 }
 
-// ========== Master Data Display =========
-async function updateMasterDataInfo() {
-    const select = document.getElementById('partSelect');
-    const selectedId = select.value;
+// ========== Load Locations for Selected Part =========
+async function loadPartLocations() {
+    const partSelect = document.getElementById('partSelect');
+    const partId = partSelect.value;
 
-    if (!selectedId) {
-        document.getElementById('masterDataInfo').style.display = 'none';
-        currentMasterData = null;
+    if (!partId) {
+        document.getElementById('partInfoBox').style.display = 'none';
+        document.getElementById('measurementVisualsContainer').style.display = 'none';
+        document.getElementById('measurementFormContainer').style.display = 'none';
         return;
     }
 
     try {
-        const response = await fetch(`${API_BASE_URL}/master-data/${selectedId}`);
-        if (!response.ok) throw new Error('Failed to load master data');
-        
-        currentMasterData = await response.json();
+        // Load part details
+        const partResponse = await fetch(`${API_BASE_URL}/master-data/${partId}`);
+        if (!partResponse.ok) throw new Error('Failed to load part');
+        currentPart = await partResponse.json();
 
-        const standardValue = currentMasterData.standard_value;
-        const tolerancePlus = currentMasterData.tolerance_plus;
-        const toleranceMinus = currentMasterData.tolerance_minus;
+        // Load locations
+        const locationsResponse = await fetch(`${API_BASE_URL}/master-data/${partId}/locations`);
+        if (!locationsResponse.ok) throw new Error('Failed to load locations');
+        currentLocations = await locationsResponse.json();
 
-        document.getElementById('standardValue').textContent = standardValue.toFixed(2);
-        document.getElementById('toleranceRange').textContent = 
-            `${(standardValue - toleranceMinus).toFixed(2)} ~ ${(standardValue + tolerancePlus).toFixed(2)}`;
+        // Load completion status
+        const today = new Date().toISOString().split('T')[0];
+        const statusResponse = await fetch(`${API_BASE_URL}/measurements/part/${partId}/status/${today}`);
+        if (statusResponse.ok) {
+            completionStatus = {};
+            const status = await statusResponse.json();
+            status.forEach(s => {
+                completionStatus[s.id] = s.status || 'PENDING';
+            });
+        }
 
-        document.getElementById('masterDataInfo').style.display = 'block';
+        // Display part info
+        displayPartInfo();
+
+        // Create visualization
+        createVisualization();
+
+        // Show containers
+        document.getElementById('partInfoBox').style.display = 'block';
+        document.getElementById('measurementVisualsContainer').style.display = 'block';
     } catch (error) {
-        console.error('Error loading master data:', error);
-        showMessage('マスターデータの読み込みに失敗しました', 'error', 'measurement');
+        console.error('Error loading locations:', error);
+        showMessage('部品情報の読み込みに失敗しました', 'error', 'measurement');
     }
 }
 
-// ========== Measurement Recording =========
-async function recordMeasurement() {
-    const select = document.getElementById('partSelect');
-    const measuredValue = parseFloat(document.getElementById('measuredValue').value);
+// ========== Display Part Info =========
+function displayPartInfo() {
+    document.getElementById('partNameDisplay').textContent = currentPart.part_name;
+    document.getElementById('partCategoryDisplay').textContent = currentPart.part_category;
+    document.getElementById('partLocationsCountDisplay').textContent = `${currentLocations.length}箇所`;
+}
 
-    // Validation
-    if (!select.value) {
-        showMessage('部品を選択してください', 'error', 'measurement');
+// ========== Create Visualization =========
+function createVisualization() {
+    const svg = document.getElementById('measurementSVG');
+    svg.innerHTML = '<rect width="400" height="300" fill="#f0f0f0" stroke="#ccc" stroke-width="2"/>';
+
+    // Add measurement points
+    currentLocations.forEach(location => {
+        const x = location.position_x || 50 + (location.location_number - 1) * 50;
+        const y = location.position_y || 150;
+        const status = completionStatus[location.id] || 'PENDING';
+
+        const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+        group.setAttribute('class', `measurement-point ${status.toLowerCase()}`);
+        group.setAttribute('id', `location-${location.id}`);
+        group.onclick = () => selectLocation(location);
+
+        // Circle
+        const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        circle.setAttribute('cx', x);
+        circle.setAttribute('cy', y);
+        circle.setAttribute('r', 6);
+        circle.setAttribute('fill', getStatusColor(status));
+        circle.setAttribute('stroke', '#fff');
+        circle.setAttribute('stroke-width', 2);
+
+        // Label
+        const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        text.setAttribute('x', x);
+        text.setAttribute('y', y + 20);
+        text.setAttribute('text-anchor', 'middle');
+        text.setAttribute('font-size', '12');
+        text.setAttribute('fill', '#333');
+        text.textContent = location.location_number;
+
+        group.appendChild(circle);
+        group.appendChild(text);
+        svg.appendChild(group);
+    });
+
+    // Display location progress
+    displayLocationProgress();
+}
+
+function getStatusColor(status) {
+    switch (status) {
+        case 'OK': return '#28a745';
+        case 'NG': return '#dc3545';
+        default: return '#ccc';
+    }
+}
+
+function displayLocationProgress() {
+    const container = document.getElementById('locationProgress');
+    container.innerHTML = '';
+
+    currentLocations.forEach(location => {
+        const status = completionStatus[location.id] || 'PENDING';
+        const badge = document.createElement('div');
+        badge.className = `location-badge ${status.toLowerCase()}`;
+        badge.innerHTML = `<strong>${location.location_number}</strong><br>${location.location_name}`;
+        container.appendChild(badge);
+    });
+}
+
+// ========== Select Location =========
+function selectLocation(location) {
+    currentLocation = location;
+    currentMeasurementId = null;
+    document.getElementById('currentLocationName').textContent = `${location.location_number}. ${location.location_name}`;
+    document.getElementById('currentStandardValue').textContent = location.standard_value.toFixed(2);
+    document.getElementById('currentToleranceRange').textContent = 
+        `${(location.standard_value - location.tolerance_minus).toFixed(2)} ~ ${(location.standard_value + location.tolerance_plus).toFixed(2)}`;
+    
+    document.getElementById('measuredValue').value = '';
+    document.getElementById('measuredValue').focus();
+    document.getElementById('measurementFormContainer').style.display = 'block';
+    document.getElementById('resultContainer').style.display = 'none';
+    document.getElementById('retakeContainer').style.display = 'none';
+}
+
+function cancelMeasurement() {
+    document.getElementById('measurementFormContainer').style.display = 'none';
+    currentLocation = null;
+}
+
+// ========== Record Measurement =========
+async function recordMeasurement() {
+    if (!currentLocation) {
+        showMessage('測定箇所を選択してください', 'error', 'measurement');
         return;
     }
+
+    const measuredValue = parseFloat(document.getElementById('measuredValue').value);
 
     if (isNaN(measuredValue) || measuredValue < 0) {
         showMessage('正の数値を入力してください', 'error', 'measurement');
         return;
     }
 
-    if (!currentMasterData) {
-        showMessage('マスターデータが読み込まれていません', 'error', 'measurement');
-        return;
-    }
-
     try {
         const response = await fetch(`${API_BASE_URL}/measurements/record`, {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                masterDataId: parseInt(select.value),
+                locationId: currentLocation.id,
                 measuredValue: measuredValue
             })
         });
@@ -138,63 +235,61 @@ async function recordMeasurement() {
         if (!response.ok) throw new Error(result.error || 'Failed to record measurement');
 
         currentMeasurementId = result.measurement.id;
+        completionStatus[currentLocation.id] = result.judgment;
         displayResult(result);
-        hideRetakeForm();
+        createVisualization();
     } catch (error) {
-        console.error('Error recording measurement:', error);
+        console.error('Error:', error);
         showMessage('測定値の記録に失敗しました: ' + error.message, 'error', 'measurement');
     }
 }
 
-// ========== Result Display =========
+// ========== Display Result =========
 function displayResult(result) {
-    const resultContainer = document.getElementById('resultContainer');
     const resultBox = document.getElementById('resultBox');
     const resultText = document.getElementById('resultText');
     const resultDetails = document.getElementById('resultDetails');
 
     const judgment = result.judgment;
     const measuredValue = result.measurement.measured_value;
-    const standardValue = result.masterData.standard_value;
-    const itemName = result.masterData.item_name;
-    const tolerancePlus = result.masterData.tolerance_plus;
-    const toleranceMinus = result.masterData.tolerance_minus;
+    const location = result.location;
 
-    // Update classes and styling
-    resultBox.className = 'result-box ' + (judgment === 'OK' ? 'ok' : 'ng');
-
-    // Update text
+    resultBox.className = `result-box ${judgment === 'OK' ? 'ok' : 'ng'}`;
     resultText.textContent = judgment === 'OK' ? '✓ 合格' : '✗ 不合格';
     resultDetails.innerHTML = `
-        <p><strong>部品名:</strong> ${itemName}</p>
+        <p><strong>測定箇所:</strong> ${location.location_name}</p>
         <p><strong>測定値:</strong> ${measuredValue.toFixed(2)} mm</p>
-        <p><strong>基準値:</strong> ${standardValue.toFixed(2)} mm</p>
-        <p><strong>許容範囲:</strong> ${(standardValue - toleranceMinus).toFixed(2)} ~ ${(standardValue + tolerancePlus).toFixed(2)} mm</p>
+        <p><strong>基準値:</strong> ${location.standard_value.toFixed(2)} mm</p>
+        <p><strong>許容範囲:</strong> ${(location.standard_value - location.tolerance_minus).toFixed(2)} ~ ${(location.standard_value + location.tolerance_plus).toFixed(2)} mm</p>
     `;
 
-    resultContainer.style.display = 'block';
-    document.getElementById('measuredValue').disabled = true;
-    document.getElementById('partSelect').disabled = true;
+    document.getElementById('measurementFormContainer').style.display = 'none';
+    document.getElementById('resultContainer').style.display = 'block';
 }
 
-// ========== Retake Functionality =========
-function showRetakeForm() {
-    document.getElementById('retakeContainer').style.display = 'block';
-    document.getElementById('retakeMeasuredValue').focus();
-}
-
-function hideRetakeForm() {
+// ========== Next Measurement =========
+function nextMeasurement() {
+    document.getElementById('resultContainer').style.display = 'none';
     document.getElementById('retakeContainer').style.display = 'none';
+    document.getElementById('measurementFormContainer').style.display = 'none';
+    currentLocation = null;
+    currentMeasurementId = null;
+}
+
+// ========== Retake Functions =========
+function showRetakeForm() {
     document.getElementById('retakeMeasuredValue').value = '';
+    document.getElementById('retakeMeasuredValue').focus();
+    document.getElementById('retakeContainer').style.display = 'block';
 }
 
 function cancelRetake() {
-    hideRetakeForm();
-    resetForm();
+    document.getElementById('retakeContainer').style.display = 'none';
 }
 
 async function recordRetakeMeasurement() {
-    const select = document.getElementById('partSelect');
+    if (!currentLocation || !currentMeasurementId) return;
+
     const retakeMeasuredValue = parseFloat(document.getElementById('retakeMeasuredValue').value);
 
     if (isNaN(retakeMeasuredValue) || retakeMeasuredValue < 0) {
@@ -205,77 +300,56 @@ async function recordRetakeMeasurement() {
     try {
         const response = await fetch(`${API_BASE_URL}/measurements/retake`, {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                masterDataId: parseInt(select.value),
+                locationId: currentLocation.id,
                 measuredValue: retakeMeasuredValue,
                 originalMeasurementId: currentMeasurementId
             })
         });
 
         const result = await response.json();
-        if (!response.ok) throw new Error(result.error || 'Failed to record retake');
+        if (!response.ok) throw new Error(result.error);
 
+        completionStatus[currentLocation.id] = result.judgment;
         displayResult(result);
-        hideRetakeForm();
+        document.getElementById('retakeContainer').style.display = 'none';
+        createVisualization();
         showMessage('再測定を記録しました', 'success', 'measurement');
     } catch (error) {
-        console.error('Error recording retake:', error);
+        console.error('Error:', error);
         showMessage('再測定の記録に失敗しました: ' + error.message, 'error', 'measurement');
     }
-}
-
-function resetForm() {
-    document.getElementById('measuredValue').value = '';
-    document.getElementById('measuredValue').disabled = false;
-    document.getElementById('partSelect').disabled = false;
-    document.getElementById('partSelect').value = '';
-    document.getElementById('masterDataInfo').style.display = 'none';
-    document.getElementById('resultContainer').style.display = 'none';
-    document.getElementById('retakeContainer').style.display = 'none';
-    hideRetakeForm();
-    currentMasterData = null;
-    currentMeasurementId = null;
 }
 
 // ========== History Loading =========
 async function loadHistory() {
     const date = document.getElementById('historyDate').value;
-
     if (!date) {
         showMessage('日付を選択してください', 'error', 'history');
         return;
     }
 
     try {
-        // Fetch measurements
         const measurementsResponse = await fetch(`${API_BASE_URL}/measurements/date/${date}`);
-        if (!measurementsResponse.ok) throw new Error('Failed to fetch measurements');
         const measurements = await measurementsResponse.json();
 
-        // Fetch statistics
         const statsResponse = await fetch(`${API_BASE_URL}/reports/stats/${date}`);
-        if (!statsResponse.ok) throw new Error('Failed to fetch statistics');
         const stats = await statsResponse.json();
 
         displayHistory(measurements, stats);
     } catch (error) {
-        console.error('Error loading history:', error);
+        console.error('Error:', error);
         showMessage('履歴の読み込みに失敗しました', 'error', 'history');
     }
 }
 
-// ========== History Display =========
 function displayHistory(measurements, stats) {
     const tableBody = document.getElementById('historyTableBody');
-    const table = document.getElementById('historyTable');
     const tableWrapper = document.getElementById('tableWrapper');
     const statsContainer = document.getElementById('statisticsContainer');
     const noDataMessage = document.getElementById('noDataMessage');
 
-    // Hide all initially
     tableWrapper.style.display = 'none';
     statsContainer.style.display = 'none';
     noDataMessage.style.display = 'none';
@@ -285,23 +359,22 @@ function displayHistory(measurements, stats) {
         return;
     }
 
-    // Update statistics
     document.getElementById('statTotal').textContent = stats.total || 0;
     document.getElementById('statOK').textContent = stats.ok_count || 0;
     document.getElementById('statNG').textContent = stats.ng_count || 0;
     document.getElementById('statRetake').textContent = stats.retake_count || 0;
     statsContainer.style.display = 'block';
 
-    // Clear and update table
     tableBody.innerHTML = '';
     measurements.forEach(m => {
         const row = document.createElement('tr');
         const timestamp = new Date(m.measurement_date).toLocaleString('ja-JP');
-        const retakeText = m.is_retake ? 'はい' : 'いいえ';
         const toleranceRange = `${(m.standard_value - m.tolerance_minus).toFixed(2)} ~ ${(m.standard_value + m.tolerance_plus).toFixed(2)}`;
+        const retakeText = m.is_retake ? 'はい' : 'いいえ';
 
         row.innerHTML = `
-            <td>${m.item_name || 'N/A'}</td>
+            <td>${m.part_name}</td>
+            <td>${m.location_name}</td>
             <td><strong>${m.measured_value.toFixed(2)}</strong></td>
             <td>${m.standard_value.toFixed(2)}</td>
             <td>${toleranceRange}</td>
@@ -315,10 +388,9 @@ function displayHistory(measurements, stats) {
     tableWrapper.style.display = 'block';
 }
 
-// ========== Report Generation =========
+// ========== Report Functions =========
 async function downloadReport() {
     const date = document.getElementById('reportDate').value;
-
     if (!date) {
         showMessage('日付を選択してください', 'error', 'report');
         return;
@@ -328,46 +400,38 @@ async function downloadReport() {
         window.location.href = `${API_BASE_URL}/reports/daily/${date}`;
         showMessage('PDFをダウンロード中...', 'info', 'report');
     } catch (error) {
-        console.error('Error downloading report:', error);
+        console.error('Error:', error);
         showMessage('PDFのダウンロードに失敗しました', 'error', 'report');
     }
 }
 
-// ========== Report Preview =========
 async function previewReport() {
     const date = document.getElementById('reportDate').value;
-
     if (!date) {
         showMessage('日付を選択してください', 'error', 'report');
         return;
     }
 
     try {
-        // Fetch measurements
         const measurementsResponse = await fetch(`${API_BASE_URL}/measurements/date/${date}`);
-        if (!measurementsResponse.ok) throw new Error('Failed to fetch measurements');
         const measurements = await measurementsResponse.json();
 
-        // Fetch statistics
         const statsResponse = await fetch(`${API_BASE_URL}/reports/stats/${date}`);
-        if (!statsResponse.ok) throw new Error('Failed to fetch statistics');
         const stats = await statsResponse.json();
 
-        // Generate preview
         const previewHTML = generatePreviewHTML(date, measurements, stats);
         document.getElementById('previewContent').innerHTML = previewHTML;
         document.getElementById('reportPreview').style.display = 'block';
     } catch (error) {
-        console.error('Error previewing report:', error);
+        console.error('Error:', error);
         showMessage('プレビューの読み込みに失敗しました', 'error', 'report');
     }
 }
 
-// ========== Preview HTML Generation =========
 function generatePreviewHTML(date, measurements, stats) {
     let html = `
         <div style="text-align: center; margin-bottom: 30px;">
-            <h2 style="font-size: 24px; margin-bottom: 10px;">📄 日次測定報告書</h2>
+            <h2 style="font-size: 24px; margin-bottom: 10px;">📋 日次測定報告書</h2>
             <p style="color: #999;">報告日: <strong>${date}</strong></p>
         </div>
         
@@ -396,11 +460,10 @@ function generatePreviewHTML(date, measurements, stats) {
             <thead>
                 <tr style="background: #667eea; color: white;">
                     <th style="border: 1px solid #ddd; padding: 12px; text-align: left; font-weight: 600;">部品名</th>
+                    <th style="border: 1px solid #ddd; padding: 12px; text-align: left; font-weight: 600;">測定箇所</th>
                     <th style="border: 1px solid #ddd; padding: 12px; text-align: left; font-weight: 600;">測定値 (mm)</th>
                     <th style="border: 1px solid #ddd; padding: 12px; text-align: left; font-weight: 600;">基準値 (mm)</th>
-                    <th style="border: 1px solid #ddd; padding: 12px; text-align: left; font-weight: 600;">許容範囲 (mm)</th>
                     <th style="border: 1px solid #ddd; padding: 12px; text-align: left; font-weight: 600;">判定</th>
-                    <th style="border: 1px solid #ddd; padding: 12px; text-align: left; font-weight: 600;">再測定</th>
                     <th style="border: 1px solid #ddd; padding: 12px; text-align: left; font-weight: 600;">測定時刻</th>
                 </tr>
             </thead>
@@ -409,19 +472,16 @@ function generatePreviewHTML(date, measurements, stats) {
 
     measurements.forEach((m, index) => {
         const timestamp = new Date(m.measurement_date).toLocaleString('ja-JP');
-        const retakeText = m.is_retake ? 'はい' : 'いいえ';
-        const toleranceRange = `${(m.standard_value - m.tolerance_minus).toFixed(2)} ~ ${(m.standard_value + m.tolerance_plus).toFixed(2)}`;
         const judgmentColor = m.judgment === 'OK' ? '#28a745' : '#dc3545';
         const bgColor = index % 2 === 0 ? 'white' : '#f9f9f9';
 
         html += `
             <tr style="background: ${bgColor};">
-                <td style="border: 1px solid #ddd; padding: 12px;">${m.item_name}</td>
+                <td style="border: 1px solid #ddd; padding: 12px;">${m.part_name}</td>
+                <td style="border: 1px solid #ddd; padding: 12px;">${m.location_name}</td>
                 <td style="border: 1px solid #ddd; padding: 12px; font-weight: 600;">${m.measured_value.toFixed(2)}</td>
                 <td style="border: 1px solid #ddd; padding: 12px;">${m.standard_value.toFixed(2)}</td>
-                <td style="border: 1px solid #ddd; padding: 12px;">${toleranceRange}</td>
                 <td style="border: 1px solid #ddd; padding: 12px; color: ${judgmentColor}; font-weight: 600;">${m.judgment}</td>
-                <td style="border: 1px solid #ddd; padding: 12px;">${retakeText}</td>
                 <td style="border: 1px solid #ddd; padding: 12px; font-size: 12px;">${timestamp}</td>
             </tr>
         `;
@@ -454,17 +514,7 @@ function showMessage(message, type, section = null) {
     messageElement.className = `message-box ${type}`;
     messageElement.style.display = 'block';
 
-    // Auto hide after 4 seconds
     setTimeout(() => {
         messageElement.style.display = 'none';
     }, 4000);
-}
-
-// ========== Utility Functions =========
-function formatDate(date) {
-    return new Date(date).toLocaleDateString('ja-JP');
-}
-
-function formatTime(date) {
-    return new Date(date).toLocaleTimeString('ja-JP');
 }

@@ -3,19 +3,19 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>建付け測定入力アプリ</title>
+    <title>自動車外装測定入力アプリ</title>
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
     <div class="container">
         <header>
-            <h1>🔧 建付け測定入力アプリ</h1>
-            <p>デジタルノギス無線測定システム</p>
+            <h1>🚗 自動車外装測定入力アプリ</h1>
+            <p>デジタルノギス無線測定システム - 複数箇所自動判定</p>
         </header>
 
         <nav class="tabs">
             <button class="tab-button active" data-tab="measurement">
-                <span class="icon">📏</span> 測定入力
+                <span class="icon">📋</span> 測定入力
             </button>
             <button class="tab-button" data-tab="history">
                 <span class="icon">📋</span> 測定履歴
@@ -28,36 +28,88 @@
         <!-- ========== Measurement Tab ========== -->
         <section id="measurement" class="tab-content active">
             <div class="card">
-                <h2>📐 測定値入力</h2>
+                <h2>📐 部品測定</h2>
                 
+                <!-- Part Selection -->
                 <div class="form-group">
-                    <label for="partSelect">部品選択:</label>
+                    <label for="partSelect">測定部品を選択:</label>
                     <select id="partSelect">
                         <option value="">-- 部品を選択してください --</option>
                     </select>
                 </div>
 
-                <div class="info-box" id="masterDataInfo" style="display: none;">
-                    <h4>マスターデータ情報</h4>
+                <!-- Part Info -->
+                <div id="partInfoBox" class="info-box" style="display: none;">
+                    <h4>部品情報</h4>
                     <div class="info-row">
-                        <span class="info-label">基準値:</span>
-                        <span class="info-value"><span id="standardValue">-</span> mm</span>
+                        <span class="info-label">部品名:</span>
+                        <span class="info-value" id="partNameDisplay">-</span>
                     </div>
                     <div class="info-row">
-                        <span class="info-label">許容範囲:</span>
-                        <span class="info-value"><span id="toleranceRange">-</span> mm</span>
+                        <span class="info-label">カテゴリ:</span>
+                        <span class="info-value" id="partCategoryDisplay">-</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">測定箇所数:</span>
+                        <span class="info-value" id="partLocationsCountDisplay">-</span>
                     </div>
                 </div>
 
-                <div class="form-group">
-                    <label for="measuredValue">測定値 (mm):</label>
-                    <input type="number" id="measuredValue" placeholder="デジタルノギスから数値を入力" step="0.01" min="0">
-                    <small>例: 25.05</small>
+                <!-- Visual Measurement Points -->
+                <div id="measurementVisualsContainer" style="display: none;">
+                    <h3>📍 測定箇所を選択</h3>
+                    <p class="visual-instruction">下の図から測定箇所をクリックして、測定値を入力してください</p>
+                    
+                    <!-- SVG Canvas for visualization -->
+                    <div class="svg-canvas-container">
+                        <svg id="measurementSVG" class="measurement-svg" width="400" height="300" viewBox="0 0 400 300">
+                            <!-- Background -->
+                            <rect width="400" height="300" fill="#f0f0f0" stroke="#ccc" stroke-width="2"/>
+                            <!-- Measurement points will be added here dynamically -->
+                        </svg>
+                    </div>
+
+                    <!-- Location Status -->
+                    <div class="location-status">
+                        <h4>測定進捗</h4>
+                        <div id="locationProgress" class="location-progress"></div>
+                    </div>
                 </div>
 
-                <button class="btn btn-primary btn-large" onclick="recordMeasurement()">
-                    <span class="btn-icon">✓</span> 測定値を記録
-                </button>
+                <!-- Measurement Input Form -->
+                <div id="measurementFormContainer" class="measurement-form-container" style="display: none;">
+                    <h3>📊 測定値入力</h3>
+                    
+                    <div class="form-group">
+                        <label for="currentLocationLabel">現在の測定箇所:</label>
+                        <div class="current-location-display">
+                            <strong id="currentLocationName">-</strong>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="currentLocationInfo">基準値・許容範囲:</label>
+                        <div class="location-info-box">
+                            <p><span class="label">基準値:</span> <span id="currentStandardValue">-</span> mm</p>
+                            <p><span class="label">許容範囲:</span> <span id="currentToleranceRange">-</span> mm</p>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="measuredValue">測定値 (mm):</label>
+                        <input type="number" id="measuredValue" placeholder="デジタルノギスから数値を入力" step="0.01" min="0">
+                        <small>例: 25.05</small>
+                    </div>
+
+                    <div class="button-group">
+                        <button class="btn btn-primary btn-large" onclick="recordMeasurement()">
+                            <span class="btn-icon">✓</span> 測定値を記録
+                        </button>
+                        <button class="btn btn-secondary" onclick="cancelMeasurement()">
+                            キャンセル
+                        </button>
+                    </div>
+                </div>
 
                 <!-- Result Container -->
                 <div id="resultContainer" class="result-container" style="display: none;">
@@ -66,7 +118,7 @@
                         <h3 id="resultText"></h3>
                         <div id="resultDetails" class="result-details"></div>
                         <div class="result-actions">
-                            <button class="btn btn-secondary" onclick="resetForm()">次の測定</button>
+                            <button class="btn btn-secondary" onclick="nextMeasurement()">次の箇所へ</button>
                             <button class="btn btn-warning" onclick="showRetakeForm()">再測定</button>
                         </div>
                     </div>
@@ -76,8 +128,9 @@
                 <div id="retakeContainer" class="retake-container" style="display: none;">
                     <div class="retake-form">
                         <h3>🔄 再測定値入力</h3>
-                        <p class="retake-info">NG判定の部品を再度測定してください</p>
+                        <p class="retake-info">NG判定の箇所を再測定してください</p>
                         <div class="form-group">
+                            <label for="retakeMeasuredValue">再測定値 (mm):</label>
                             <input type="number" id="retakeMeasuredValue" placeholder="再測定値を入力" step="0.01" min="0">
                         </div>
                         <div class="button-group">
@@ -137,12 +190,19 @@
                     </div>
                 </div>
 
+                <!-- Part-wise Statistics -->
+                <div id="partStatsContainer" style="display: none;">
+                    <h3>部品別統計</h3>
+                    <div id="partStatsContent" class="part-stats-content"></div>
+                </div>
+
                 <!-- History Table -->
                 <div class="table-wrapper" id="tableWrapper" style="display: none;">
                     <table id="historyTable" class="history-table">
                         <thead>
                             <tr>
                                 <th>部品名</th>
+                                <th>測定箇所</th>
                                 <th>測定値 (mm)</th>
                                 <th>基準値 (mm)</th>
                                 <th>許容範囲 (mm)</th>
@@ -157,7 +217,7 @@
                 </div>
 
                 <div id="noDataMessage" class="no-data-message" style="display: none;">
-                    <p>📭 選択した日付のデータがありません</p>
+                    <p>😴 選択した日付のデータがありません</p>
                 </div>
             </div>
         </section>
@@ -196,7 +256,7 @@
     </div>
 
     <footer>
-        <p>&copy; 2024 建付け測定入力アプリ | Version 1.0.0</p>
+        <p>&copy; 2024 自動車外装測定入力アプリ | Version 2.0.0 - Multi-Location Support</p>
     </footer>
 
     <script src="script.js"></script>
